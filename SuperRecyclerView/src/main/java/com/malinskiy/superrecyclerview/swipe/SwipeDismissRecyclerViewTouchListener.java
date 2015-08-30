@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-package com.malinskiy.superrecyclerview;
+package com.malinskiy.superrecyclerview.swipe;
 
+import android.annotation.SuppressLint;
 import android.graphics.Rect;
 import android.os.SystemClock;
 import android.support.v4.view.MotionEventCompat;
@@ -65,7 +66,7 @@ public class SwipeDismissRecyclerViewTouchListener implements View.OnTouchListen
     private boolean         mPaused;
 
     /**
-     * The callback interface used by {@link com.malinskiy.superrecyclerview.SwipeDismissRecyclerViewTouchListener} to inform its client
+     * The callback interface used by {@link SwipeDismissRecyclerViewTouchListener} to inform its client
      * about a successful dismissal of one or more list item positions.
      */
     public interface DismissCallbacks {
@@ -116,10 +117,10 @@ public class SwipeDismissRecyclerViewTouchListener implements View.OnTouchListen
      * Returns an {@link android.widget.AbsListView.OnScrollListener} to be added to the {@link
      * android.widget.ListView} using {@link android.widget.ListView#setOnScrollListener(android.widget.AbsListView.OnScrollListener)}.
      * If a scroll listener is already assigned, the caller should still pass scroll changes through
-     * to this listener. This will ensure that this {@link com.malinskiy.superrecyclerview.SwipeDismissRecyclerViewTouchListener} is
+     * to this listener. This will ensure that this {@link SwipeDismissRecyclerViewTouchListener} is
      * paused during list view scrolling.</p>
      *
-     * @see com.malinskiy.superrecyclerview.SwipeDismissRecyclerViewTouchListener
+     * @see SwipeDismissRecyclerViewTouchListener
      */
     public RecyclerView.OnScrollListener makeScrollListener() {
         return new RecyclerView.OnScrollListener() {
@@ -134,6 +135,7 @@ public class SwipeDismissRecyclerViewTouchListener implements View.OnTouchListen
         };
     }
 
+    @SuppressLint("AndroidLintClickableViewAccessibility")
     @Override
     public boolean onTouch(View view, MotionEvent motionEvent) {
         if (mViewWidth < 2) {

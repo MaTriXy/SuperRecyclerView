@@ -14,14 +14,19 @@ import android.view.View;
 import android.view.ViewStub;
 import android.widget.FrameLayout;
 
+import com.malinskiy.superrecyclerview.swipe.SwipeDismissRecyclerViewTouchListener;
+
 public class SuperRecyclerView extends FrameLayout {
 
     protected int ITEM_LEFT_TO_LOAD_MORE = 10;
 
+    protected RecyclerView mRecycler;
     protected ViewStub     mProgress;
     protected ViewStub     mMoreProgress;
-    protected RecyclerView mRecycler;
     protected ViewStub     mEmpty;
+    protected View         mProgressView;
+    protected View         mMoreProgressView;
+    protected View         mEmptyView;
 
     protected boolean mClipToPadding;
     protected int     mPadding;
@@ -41,11 +46,12 @@ public class SuperRecyclerView extends FrameLayout {
 
     protected OnMoreListener     mOnMoreListener;
     protected boolean            isLoadingMore;
-    protected int                mSelector;
     protected SwipeRefreshLayout mPtrLayout;
 
     protected int mSuperRecyclerViewMainLayout;
     private   int mProgressId;
+
+    private int[] lastScrollPositions;
 
     public SwipeRefreshLayout getSwipeToRefresh() {
         return mPtrLayout;
@@ -86,7 +92,6 @@ public class SuperRecyclerView extends FrameLayout {
             mEmptyId = a.getResourceId(R.styleable.superrecyclerview_layout_empty, 0);
             mMoreProgressId = a.getResourceId(R.styleable.superrecyclerview_layout_moreProgress, R.layout.layout_more_progress);
             mProgressId = a.getResourceId(R.styleable.superrecyclerview_layout_progress, R.layout.layout_progress);
-            mSelector = a.getResourceId(R.styleable.superrecyclerview_layout_recyclerSelector, 0);
         } finally {
             a.recycle();
         }
@@ -103,18 +108,18 @@ public class SuperRecyclerView extends FrameLayout {
         mProgress = (ViewStub) v.findViewById(android.R.id.progress);
 
         mProgress.setLayoutResource(mProgressId);
-        mProgress.inflate();
+        mProgressView = mProgress.inflate();
 
         mMoreProgress = (ViewStub) v.findViewById(R.id.more_progress);
         mMoreProgress.setLayoutResource(mMoreProgressId);
         if (mMoreProgressId != 0)
-            mMoreProgress.inflate();
+            mMoreProgressView = mMoreProgress.inflate();
         mMoreProgress.setVisibility(View.GONE);
 
         mEmpty = (ViewStub) v.findViewById(R.id.empty);
         mEmpty.setLayoutResource(mEmptyId);
         if (mEmptyId != 0)
-            mEmpty.inflate();
+            mEmptyView = mEmpty.inflate();
         mEmpty.setVisibility(View.GONE);
 
         initRecyclerView(v);
@@ -135,57 +140,12 @@ public class SuperRecyclerView extends FrameLayout {
         if (mRecycler != null) {
             mRecycler.setClipToPadding(mClipToPadding);
             mInternalOnScrollListener = new RecyclerView.OnScrollListener() {
-                private int[] lastPositions;
 
                 @Override
                 public void onScrolled(RecyclerView recyclerView, int dx, int dy) {
                     super.onScrolled(recyclerView, dx, dy);
 
-                    RecyclerView.LayoutManager layoutManager = recyclerView.getLayoutManager();
-                    int visibleItemCount = layoutManager.getChildCount();
-                    int totalItemCount = layoutManager.getItemCount();
-
-                    int lastVisibleItemPosition = -1;
-                    if (layoutManagerType == null) {
-                        if (layoutManager instanceof LinearLayoutManager) {
-                            layoutManagerType = LAYOUT_MANAGER_TYPE.LINEAR;
-                        } else if (layoutManager instanceof GridLayoutManager) {
-                            layoutManagerType = LAYOUT_MANAGER_TYPE.GRID;
-                        } else if (layoutManager instanceof StaggeredGridLayoutManager) {
-                            layoutManagerType = LAYOUT_MANAGER_TYPE.STAGGERED_GRID;
-                        } else {
-                            throw new RuntimeException("Unsupported LayoutManager used. Valid ones are LinearLayoutManager, GridLayoutManager and StaggeredGridLayoutManager");
-                        }
-                    }
-
-                    switch (layoutManagerType) {
-                        case LINEAR:
-                            lastVisibleItemPosition = ((LinearLayoutManager) layoutManager).findLastVisibleItemPosition();
-                            break;
-                        case GRID:
-                            lastVisibleItemPosition = ((GridLayoutManager) layoutManager).findLastVisibleItemPosition();
-                            break;
-                        case STAGGERED_GRID:
-                            StaggeredGridLayoutManager staggeredGridLayoutManager = (StaggeredGridLayoutManager) layoutManager;
-                            if (lastPositions == null)
-                                lastPositions = new int[staggeredGridLayoutManager.getSpanCount()];
-
-                            staggeredGridLayoutManager.findLastVisibleItemPositions(lastPositions);
-                            lastVisibleItemPosition = findMax(lastPositions);
-                            break;
-                    }
-
-                    if (((totalItemCount - lastVisibleItemPosition) <= ITEM_LEFT_TO_LOAD_MORE ||
-                         (totalItemCount - lastVisibleItemPosition) == 0 && totalItemCount > visibleItemCount)
-                        && !isLoadingMore) {
-
-                        isLoadingMore = true;
-                        if (mOnMoreListener != null) {
-                            mMoreProgress.setVisibility(View.VISIBLE);
-                            mOnMoreListener.onMoreAsked(mRecycler.getAdapter().getItemCount(), ITEM_LEFT_TO_LOAD_MORE, lastVisibleItemPosition);
-
-                        }
-                    }
+                    processOnMore();
 
                     if (mExternalOnScrollListener != null)
                         mExternalOnScrollListener.onScrolled(recyclerView, dx, dy);
@@ -202,18 +162,69 @@ public class SuperRecyclerView extends FrameLayout {
                         mSwipeDismissScrollListener.onScrollStateChanged(recyclerView, newState);
                 }
             };
-            mRecycler.setOnScrollListener(mInternalOnScrollListener);
-            if (mSelector != 0)
+            mRecycler.addOnScrollListener(mInternalOnScrollListener);
 
-                if (mPadding != -1.0f) {
-                    mRecycler.setPadding(mPadding, mPadding, mPadding, mPadding);
-                } else {
-                    mRecycler.setPadding(mPaddingLeft, mPaddingTop, mPaddingRight, mPaddingBottom);
-                }
+            if (mPadding != -1.0f) {
+                mRecycler.setPadding(mPadding, mPadding, mPadding, mPadding);
+            } else {
+                mRecycler.setPadding(mPaddingLeft, mPaddingTop, mPaddingRight, mPaddingBottom);
+            }
 
-            if (mScrollbarStyle != -1)
+            if (mScrollbarStyle != -1) {
                 mRecycler.setScrollBarStyle(mScrollbarStyle);
+            }
         }
+    }
+
+    private void processOnMore() {
+        RecyclerView.LayoutManager layoutManager = mRecycler.getLayoutManager();
+        int lastVisibleItemPosition = getLastVisibleItemPosition(layoutManager);
+        int visibleItemCount = layoutManager.getChildCount();
+        int totalItemCount = layoutManager.getItemCount();
+
+        if (((totalItemCount - lastVisibleItemPosition) <= ITEM_LEFT_TO_LOAD_MORE ||
+             (totalItemCount - lastVisibleItemPosition) == 0 && totalItemCount > visibleItemCount)
+            && !isLoadingMore) {
+
+            isLoadingMore = true;
+            if (mOnMoreListener != null) {
+                mMoreProgress.setVisibility(View.VISIBLE);
+                mOnMoreListener.onMoreAsked(mRecycler.getAdapter().getItemCount(), ITEM_LEFT_TO_LOAD_MORE, lastVisibleItemPosition);
+            }
+        }
+    }
+
+    private int getLastVisibleItemPosition(RecyclerView.LayoutManager layoutManager) {
+        int lastVisibleItemPosition = -1;
+        if (layoutManagerType == null) {
+            if (layoutManager instanceof LinearLayoutManager) {
+                layoutManagerType = LAYOUT_MANAGER_TYPE.LINEAR;
+            } else if (layoutManager instanceof GridLayoutManager) {
+                layoutManagerType = LAYOUT_MANAGER_TYPE.GRID;
+            } else if (layoutManager instanceof StaggeredGridLayoutManager) {
+                layoutManagerType = LAYOUT_MANAGER_TYPE.STAGGERED_GRID;
+            } else {
+                throw new RuntimeException("Unsupported LayoutManager used. Valid ones are LinearLayoutManager, GridLayoutManager and StaggeredGridLayoutManager");
+            }
+        }
+
+        switch (layoutManagerType) {
+            case LINEAR:
+                lastVisibleItemPosition = ((LinearLayoutManager) layoutManager).findLastVisibleItemPosition();
+                break;
+            case GRID:
+                lastVisibleItemPosition = ((GridLayoutManager) layoutManager).findLastVisibleItemPosition();
+                break;
+            case STAGGERED_GRID:
+                StaggeredGridLayoutManager staggeredGridLayoutManager = (StaggeredGridLayoutManager) layoutManager;
+                if (lastScrollPositions == null)
+                    lastScrollPositions = new int[staggeredGridLayoutManager.getSpanCount()];
+
+                staggeredGridLayoutManager.findLastVisibleItemPositions(lastScrollPositions);
+                lastVisibleItemPosition = findMax(lastScrollPositions);
+                break;
+        }
+        return lastVisibleItemPosition;
     }
 
     private int findMax(int[] lastPositions) {
@@ -223,6 +234,71 @@ public class SuperRecyclerView extends FrameLayout {
                 max = value;
         }
         return max;
+    }
+
+    /**
+     * @param adapter                       The new adapter to set, or null to set no adapter
+     * @param compatibleWithPrevious        Should be set to true if new adapter uses the same {@android.support.v7.widget.RecyclerView.ViewHolder} as previous one
+     * @param removeAndRecycleExistingViews If set to true, RecyclerView will recycle all existing Views. If adapters have stable ids and/or you want to animate the disappearing views, you may prefer to set this to false
+     */
+    private void setAdapterInternal(RecyclerView.Adapter adapter, boolean compatibleWithPrevious,
+                                    boolean removeAndRecycleExistingViews) {
+        if (compatibleWithPrevious)
+            mRecycler.swapAdapter(adapter, removeAndRecycleExistingViews);
+        else
+            mRecycler.setAdapter(adapter);
+
+        mProgress.setVisibility(View.GONE);
+        mRecycler.setVisibility(View.VISIBLE);
+        mPtrLayout.setRefreshing(false);
+        if (null != adapter)
+            adapter.registerAdapterDataObserver(new RecyclerView.AdapterDataObserver() {
+                @Override
+                public void onItemRangeChanged(int positionStart, int itemCount) {
+                    super.onItemRangeChanged(positionStart, itemCount);
+                    update();
+                }
+
+                @Override
+                public void onItemRangeInserted(int positionStart, int itemCount) {
+                    super.onItemRangeInserted(positionStart, itemCount);
+                    update();
+                }
+
+                @Override
+                public void onItemRangeRemoved(int positionStart, int itemCount) {
+                    super.onItemRangeRemoved(positionStart, itemCount);
+                    update();
+                }
+
+                @Override
+                public void onItemRangeMoved(int fromPosition, int toPosition, int itemCount) {
+                    super.onItemRangeMoved(fromPosition, toPosition, itemCount);
+                    update();
+                }
+
+                @Override
+                public void onChanged() {
+                    super.onChanged();
+                    update();
+                }
+
+                private void update() {
+                    mProgress.setVisibility(View.GONE);
+                    mMoreProgress.setVisibility(View.GONE);
+                    isLoadingMore = false;
+                    mPtrLayout.setRefreshing(false);
+                    if (mRecycler.getAdapter().getItemCount() == 0 && mEmptyId != 0) {
+                        mEmpty.setVisibility(View.VISIBLE);
+                    } else if (mEmptyId != 0) {
+                        mEmpty.setVisibility(View.GONE);
+                    }
+                }
+            });
+
+        mEmpty.setVisibility(null != adapter && adapter.getItemCount() > 0 && mEmptyId != 0
+                             ? View.GONE
+                             : View.VISIBLE);
     }
 
     /**
@@ -243,55 +319,15 @@ public class SuperRecyclerView extends FrameLayout {
      * @param adapter
      */
     public void setAdapter(RecyclerView.Adapter adapter) {
-        mRecycler.setAdapter(adapter);
-        mProgress.setVisibility(View.GONE);
-        mRecycler.setVisibility(View.VISIBLE);
-        mPtrLayout.setRefreshing(false);
-        adapter.registerAdapterDataObserver(new RecyclerView.AdapterDataObserver() {
-            @Override
-            public void onItemRangeChanged(int positionStart, int itemCount) {
-                super.onItemRangeChanged(positionStart, itemCount);
-                update();
-            }
+        setAdapterInternal(adapter, false, true);
+    }
 
-            @Override
-            public void onItemRangeInserted(int positionStart, int itemCount) {
-                super.onItemRangeInserted(positionStart, itemCount);
-                update();
-            }
-
-            @Override
-            public void onItemRangeRemoved(int positionStart, int itemCount) {
-                super.onItemRangeRemoved(positionStart, itemCount);
-                update();
-            }
-
-            @Override
-            public void onItemRangeMoved(int fromPosition, int toPosition, int itemCount) {
-                super.onItemRangeMoved(fromPosition, toPosition, itemCount);
-                update();
-            }
-
-            @Override
-            public void onChanged() {
-                super.onChanged();
-                update();
-            }
-
-            private void update() {
-                mProgress.setVisibility(View.GONE);
-                isLoadingMore = false;
-                mPtrLayout.setRefreshing(false);
-                if (mRecycler.getAdapter().getItemCount() == 0 && mEmptyId != 0) {
-                    mEmpty.setVisibility(View.VISIBLE);
-                } else if (mEmptyId != 0) {
-                    mEmpty.setVisibility(View.GONE);
-                }
-            }
-        });
-        if ((adapter == null || adapter.getItemCount() == 0) && mEmptyId != 0) {
-            mEmpty.setVisibility(View.VISIBLE);
-        }
+    /**
+     * @param adapter                       The new adapter to , or null to set no adapter.
+     * @param removeAndRecycleExistingViews If set to true, RecyclerView will recycle all existing Views. If adapters have stable ids and/or you want to animate the disappearing views, you may prefer to set this to false.
+     */
+    public void swapAdapter(RecyclerView.Adapter adapter, boolean removeAndRecycleExistingViews) {
+        setAdapterInternal(adapter, true, removeAndRecycleExistingViews);
     }
 
     public void setupSwipeToDismiss(final SwipeDismissRecyclerViewTouchListener.DismissCallbacks listener) {
@@ -337,12 +373,10 @@ public class SuperRecyclerView extends FrameLayout {
 
     public void showMoreProgress() {
         mMoreProgress.setVisibility(View.VISIBLE);
-
     }
 
     public void hideMoreProgress() {
         mMoreProgress.setVisibility(View.GONE);
-
     }
 
     /**
@@ -483,8 +517,38 @@ public class SuperRecyclerView extends FrameLayout {
         mRecycler.removeItemDecoration(itemDecoration);
     }
 
+    /**
+     * @return inflated progress view or null
+     */
+    public View getProgressView() {
+        return mProgressView;
+    }
 
-    public static enum LAYOUT_MANAGER_TYPE {
+    /**
+     * @return inflated more progress view or null
+     */
+    public View getMoreProgressView() {
+        return mMoreProgressView;
+    }
+
+    /**
+     * @return inflated empty view or null
+     */
+    public View getEmptyView() {
+        return mEmptyView;
+    }
+
+    /**
+     * Animate a scroll by the given amount of pixels along either axis.
+     *
+     * @param dx Pixels to scroll horizontally
+     * @param dy Pixels to scroll vertically
+     */
+    public void smoothScrollBy(int dx, int dy) {
+        mRecycler.smoothScrollBy(dx, dy);
+    }
+
+    public enum LAYOUT_MANAGER_TYPE {
         LINEAR,
         GRID,
         STAGGERED_GRID
